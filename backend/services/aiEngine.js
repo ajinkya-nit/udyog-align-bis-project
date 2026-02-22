@@ -120,6 +120,9 @@ ${standardContext.pdfText}
 YOUR JOB:
 1. Analyze the chat history and any user uploaded documents.
 2. Determine which mandatory equipment from the PRODUCT MANUAL the user actually possesses.
+   - If the user explicitly mentions having the equipment (e.g. "Yes, I confirm we have a finalized Factory Layout Plan" or "we have a Megger"), mark its status as "green".
+   - If they uploaded a document (e.g. "test_reports.pdf") and the equipment is mentioned in the chat or document, mark its status as "green".
+   - Otherwise, mark its status as "red" or "yellow" (Pending Verification).
 3. Calculate a "readinessScore" (0-100) based on how many items they possess vs how many are required in the manual's "List of Test Equipment" or "Scheme of Inspection". 
 4. Output STRICTLY a JSON object matching this structure:
 {

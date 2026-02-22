@@ -18,10 +18,14 @@ exports.processChat = async (req, res) => {
     const extractorPrompt = aiEngine.generateExtractorPrompt(standardContext);
 
     // 4. Construct payload for Extractor
+    const historyText = chatHistory.map(m => "--- " + m.role.toUpperCase() + " ---\n" + m.content).join("\n\n");
     const extractorPromptString = `
+      --- CHAT HISTORY LOGS ---
+      ${historyText}
+      
       User Message: "${message}"
       Uploaded File URL: ${fileUrl || 'None'}
-      ${uploadedDocumentText ? `\n\n=== USER UPLOADED DOCUMENT CONTENT ===\n${uploadedDocumentText}\n======================================\n\nTask: Analyze the user's uploaded document content above. Cross-reference it with the GROUND TRUTH PRODUCT MANUAL. Does their document prove they have the required equipment? Update the JSON status to green if they do.` : ''}
+      ${uploadedDocumentText ? "\n\n=== USER UPLOADED DOCUMENT CONTENT ===\n" + uploadedDocumentText + "\n======================================\n\nTask: Analyze the user's uploaded document content above. Cross-reference it with the GROUND TRUTH PRODUCT MANUAL. Does their document prove they have the required equipment? Update the JSON status to green if they do." : ""}
     `;
 
     if (!hasValidKey) {
@@ -34,23 +38,17 @@ exports.processChat = async (req, res) => {
       let aiResponseText = `Hello! What product do you manufacture so I can find the right BIS code?`;
       
       if (standardContext) {
-         const pastUserMessages = chatHistory.filter(m => m.role === 'user').length;
-         
-         if (pastUserMessages <= 1) {
-             aiResponseText = `I noticed you manufacture products under ${standardContext.isCode}. I've loaded the requirements. Do you have the ${standardContext.mandatoryEquipment[0]?.name || 'required equipment'} installed?`;
-         } else if (pastUserMessages === 2) {
-             if (uploadedDocumentText) {
-                aiResponseText = `I see you uploaded a document. I have reviewed the text from it. Based on the logs provided, I've marked the ${standardContext.mandatoryEquipment[0]?.name || 'test rig'} as complete. Do you also have the ${standardContext.mandatoryEquipment[1]?.name || 'other test rigs'} ready for evaluation?`;
-                score = 65;
-             } else if (isYesInput) {
-                aiResponseText = `Great! I've marked the ${standardContext.mandatoryEquipment[0]?.name || 'test rig'} as complete. Do you also have the ${standardContext.mandatoryEquipment[1]?.name || 'other test rigs'} ready for evaluation?`;
-                score = 65;
-             } else {
-                aiResponseText = `That's okay! Many MSMEs outsource this. Are you planning to partner with a NABL accredited lab?`;
-             }
-         } else {
+         if (uploadedDocumentText) {
+             aiResponseText = `I see you uploaded a document. I have reviewed the text from it. Based on the logs provided, I've marked the ${standardContext.mandatoryEquipment[0]?.name || 'test rig'} as complete. Do you also have the ${standardContext.mandatoryEquipment[1]?.name || 'other test rigs'} ready for evaluation?`;
+             score = 65;
+         } else if (isYesInput) {
+             aiResponseText = `Great! I've marked the ${standardContext.mandatoryEquipment[0]?.name || 'test rig'} as complete. Do you also have the ${standardContext.mandatoryEquipment[1]?.name || 'other test rigs'} ready for evaluation?`;
+             score = 65;
+         } else if (message.toLowerCase().includes('layout') || chatHistory.length > 5) {
              aiResponseText = `Understood. I have logged your responses against ${standardContext.isCode}. Your Readiness Score is looking good. What about your factory layout plan documentation?`;
              score = 85;
+         } else {
+             aiResponseText = `I noticed you manufacture products under ${standardContext.isCode}. I've loaded the requirements. Do you have the ${standardContext.mandatoryEquipment[0]?.name || 'required equipment'} installed?`;
          }
       }
 
@@ -58,11 +56,14 @@ exports.processChat = async (req, res) => {
         readinessScore: score,
         isCode: standardContext ? standardContext.isCode : null,
         subsidyCategory: standardContext ? standardContext.subsidyCategory : null,
-        checklist: standardContext ? standardContext.mandatoryEquipment.map(e => ({
-          item: e.name,
-          status: isYesInput ? 'green' : (Math.random() > 0.5 ? 'green' : 'red'),
-          suggestion: isYesInput ? 'Verified.' : 'Mock evaluation.'
-        })) : [],
+        checklist: standardContext ? standardContext.mandatoryEquipment.map((e, idx) => {
+          const isMockVerified = isYesInput || (uploadedDocumentText && idx === 0);
+          return {
+            item: e.name,
+            status: isMockVerified ? 'green' : (Math.random() > 0.5 ? 'green' : 'red'),
+            suggestion: isMockVerified ? 'Verified.' : 'Mock evaluation.'
+          };
+        }) : [],
         aiMessage: aiResponseText
       });
     }
@@ -90,9 +91,16 @@ exports.processChat = async (req, res) => {
     let extractedState = {};
     
     try {
-      const jsonStr = extractorText.replace(/```json/g, '').replace(/```/g, '').trim();
-      extractedState = JSON.parse(jsonStr);
-      console.log("Agent 1 Successfully extracted state:", jsonStr);
+      // Find the first { and last } to extract just the JSON object
+      const startIdx = extractorText.indexOf('{');
+      const endIdx = extractorText.lastIndexOf('}');
+      if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+        const jsonStr = extractorText.substring(startIdx, endIdx + 1);
+        extractedState = JSON.parse(jsonStr);
+        console.log("Agent 1 Successfully extracted state:", jsonStr);
+      } else {
+        throw new Error("No JSON object found in response");
+      }
     } catch (parseErr) {
       console.error('Agent 1 Failed to parse JSON. Falling back. Text:', extractorText);
       // Fallback state if LLM hallucinated
